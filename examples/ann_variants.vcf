@@ -1,0 +1,11 @@
+##fileformat=VCFv4.2
+##reference=chrA
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
+chrA	5	.	A	T	.	.	.
+chrA	6	.	T	C	.	.	.
+chrA	23	.	T	C	.	.	.
+chrA	30	.	T	A	.	.	.
+chrA	43	.	A	G	.	.	.
+chrA	45	.	A	G	.	.	.
+chrA	47	.	T	C	.	.	.
+chrA	49	.	T	A	.	.	.

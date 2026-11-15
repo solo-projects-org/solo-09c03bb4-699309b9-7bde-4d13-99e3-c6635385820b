@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}注释报告 #{{ report["id"] }} - 肿瘤变异位点比对{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>注释报告 #{{ report["id"] }}
+    {% if report["status"] == "done" %}<span class="badge ok">完成</span>{% else %}<span class="badge fail">失败</span>{% endif %}
+  </h2>
+  <dl class="meta">
+    <dt>提交时间</dt><dd>{{ report["created_at"] }}</dd>
+    <dt>参考序列</dt><dd>{% if report["ref_name"] %}{{ report["ref_name"] }}，{{ report["ref_length"] }} bp，sha256 {{ report["ref_sha256"][:16] }}…{% else %}-（解析失败）{% endif %}</dd>
+    <dt>FASTA 文件</dt><dd>{{ report["fasta_filename"] or "-" }}</dd>
+    <dt>VCF 文件</dt><dd>{{ report["vcf_filename"] or "-" }}</dd>
+    <dt>CDS TSV 文件</dt><dd>{{ report["cds_filename"] or "-" }}</dd>
+  </dl>
+  {% if report["status"] == "failed" %}
+  <h2>失败原因</h2>
+  <div class="error-box">{{ report["error"] }}</div>
+  {% endif %}
+</div>
+
+{% if report["status"] == "done" %}
+<div class="card">
+  <h2>结论统计</h2>
+  <p>
+    {% for label, count in summary.items() %}
+    <span class="badge {{ 'ok' if label == '同义' else 'fail' if label in ('终止获得', '终止丢失') else 'neutral' }}">{{ label }} {{ count }}</span>
+    {% endfor %}
+  </p>
+</div>
+
+<div class="card">
+  <h2>注释结果（{{ rows | length }} 行）</h2>
+  {% if rows %}
+  <table>
+    <tr>
+      <th>位置</th><th>REF</th><th>ALT</th><th>VCF 行号</th>
+      <th>转录本</th><th>CDS 位置</th><th>密码子序号</th>
+      <th>原密码子</th><th>新密码子</th><th>原氨基酸</th><th>新氨基酸</th><th>结论</th>
+    </tr>
+    {% for v in rows %}
+    <tr>
+      <td>{{ v.pos }}</td>
+      <td>{{ v.ref }}</td>
+      <td>{{ v.alt }}</td>
+      <td>{{ v.lines }}</td>
+      {% if v.transcript %}
+      <td>{{ v.transcript }}</td>
+      <td>{{ v.cds_pos }}</td>
+      <td>{{ v.codon_number }}</td>
+      <td>{{ v.ref_codon }}</td>
+      <td>{{ v.new_codon }}</td>
+      <td>{{ v.aa_ref }}</td>
+      <td>{{ v.aa_new }}</td>
+      {% else %}
+      <td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>
+      {% endif %}
+      <td><span class="badge {{ 'ok' if v.consequence == 'synonymous' else 'fail' if v.consequence in ('stop_gained', 'stop_lost') else 'neutral' }}">{{ v.consequence_label }}</span></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">VCF 中没有 SNV 记录。</p>
+  {% endif %}
+  <p class="muted">CDS 按转录方向拼接（负链取反向互补）；密码子、氨基酸均按转录方向给出。
+    同一 SNV 命中多个转录本时每个转录本各占一行；未命中任何转录本的 SNV 标为 “CDS 外”。</p>
+</div>
+{% endif %}
+{% endblock %}

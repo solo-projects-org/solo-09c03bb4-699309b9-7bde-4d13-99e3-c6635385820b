@@ -11,6 +11,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .annotate import Annotation
 from .compare import ComparedSite
 
 SCHEMA = """
@@ -37,6 +38,35 @@ CREATE TABLE IF NOT EXISTS variants (
     lines_b TEXT NOT NULL              -- JSON 数组，乙 VCF 原行号
 );
 CREATE INDEX IF NOT EXISTS idx_variants_report ON variants(report_id);
+CREATE TABLE IF NOT EXISTS annotation_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL,              -- 'done' | 'failed'
+    error TEXT,                        -- 失败原因（含文件名与行号）
+    ref_name TEXT,
+    ref_length INTEGER,
+    ref_sha256 TEXT,
+    fasta_filename TEXT,
+    vcf_filename TEXT,
+    cds_filename TEXT
+);
+CREATE TABLE IF NOT EXISTS annotations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_id INTEGER NOT NULL REFERENCES annotation_reports(id),
+    pos INTEGER NOT NULL,
+    ref TEXT NOT NULL,
+    alt TEXT NOT NULL,
+    vcf_lines TEXT NOT NULL,           -- JSON 数组，VCF 原行号
+    transcript TEXT,                   -- 转录本 ID，NULL 表示 CDS 外
+    cds_pos INTEGER,                   -- CDS 内 1-based 位置
+    codon_number INTEGER,              -- 第几个密码子（1-based）
+    ref_codon TEXT,
+    new_codon TEXT,
+    aa_ref TEXT,
+    aa_new TEXT,
+    consequence TEXT NOT NULL          -- 'synonymous'|'missense'|'stop_gained'|'stop_lost'|'outside_cds'
+);
+CREATE INDEX IF NOT EXISTS idx_annotations_report ON annotations(report_id);
 """
 
 
@@ -143,3 +173,90 @@ def get_report(
         (report_id,),
     ).fetchall()
     return report, variants
+
+
+def insert_annotation_report(
+    conn: sqlite3.Connection,
+    *,
+    status: str,
+    error: str | None,
+    ref_name: str | None,
+    ref_length: int | None,
+    ref_sha256: str | None,
+    fasta_filename: str | None,
+    vcf_filename: str | None,
+    cds_filename: str | None,
+    annotations: list[Annotation],
+) -> int:
+    """单事务写入一份注释报告及其全部注释行；失败整体回滚，不留半成品。"""
+    with conn:  # 成功提交、异常回滚
+        cur = conn.execute(
+            """INSERT INTO annotation_reports
+               (created_at, status, error, ref_name, ref_length, ref_sha256,
+                fasta_filename, vcf_filename, cds_filename)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+                status,
+                error,
+                ref_name,
+                ref_length,
+                ref_sha256,
+                fasta_filename,
+                vcf_filename,
+                cds_filename,
+            ),
+        )
+        report_id = cur.lastrowid
+        conn.executemany(
+            """INSERT INTO annotations
+               (report_id, pos, ref, alt, vcf_lines, transcript, cds_pos,
+                codon_number, ref_codon, new_codon, aa_ref, aa_new, consequence)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                (
+                    report_id,
+                    a.snv.pos,
+                    a.snv.ref,
+                    a.snv.alt,
+                    json.dumps(list(a.snv.lines)),
+                    a.transcript,
+                    a.cds_pos,
+                    a.codon_number,
+                    a.ref_codon,
+                    a.new_codon,
+                    a.aa_ref,
+                    a.aa_new,
+                    a.consequence,
+                )
+                for a in annotations
+            ],
+        )
+    return report_id
+
+
+def list_annotation_reports(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        """SELECT r.*,
+                  (SELECT COUNT(*) FROM annotations a
+                    WHERE a.report_id = r.id) AS n_annotations,
+                  (SELECT COUNT(DISTINCT a.pos || '|' || a.ref || '|' || a.alt)
+                    FROM annotations a WHERE a.report_id = r.id) AS n_snvs
+           FROM annotation_reports r ORDER BY r.id DESC"""
+    ).fetchall()
+
+
+def get_annotation_report(
+    conn: sqlite3.Connection, report_id: int
+) -> tuple[sqlite3.Row | None, list[sqlite3.Row]]:
+    report = conn.execute(
+        "SELECT * FROM annotation_reports WHERE id = ?", (report_id,)
+    ).fetchone()
+    if report is None:
+        return None, []
+    annotations = conn.execute(
+        """SELECT * FROM annotations WHERE report_id = ?
+           ORDER BY pos, ref, alt, transcript""",
+        (report_id,),
+    ).fetchall()
+    return report, annotations

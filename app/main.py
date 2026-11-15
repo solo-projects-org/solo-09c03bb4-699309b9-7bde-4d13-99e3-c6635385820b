@@ -1,4 +1,5 @@
-"""FastAPI 网页服务：上传参考序列与甲乙两份 VCF，查看位点差异报告。"""
+"""FastAPI 网页服务：上传参考序列与甲乙两份 VCF 查看位点差异报告；
+上传参考序列、SNV VCF 与 CDS TSV 查看变异注释报告。"""
 from __future__ import annotations
 
 import json
@@ -11,6 +12,13 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from . import db
+from .annotate import (
+    CONSEQUENCE_LABELS,
+    AnnotateError,
+    annotate_all,
+    parse_cds_tsv,
+    parse_snv_vcf,
+)
 from .compare import CompareError, categorize, parse_fasta, parse_vcf
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -101,6 +109,67 @@ def create_app(db_path: str | None = None) -> FastAPI:
             request, "report.html", {"report": report, "sections": sections}
         )
 
+    @app.get("/annotate", response_class=HTMLResponse)
+    def annotate_index(request: Request, conn=Depends(get_conn)):
+        return templates.TemplateResponse(
+            request, "annotate.html", {"reports": db.list_annotation_reports(conn)}
+        )
+
+    @app.post("/annotations")
+    def create_annotation(
+        fasta: UploadFile = File(...),
+        vcf: UploadFile = File(...),
+        cds: UploadFile = File(...),
+        conn=Depends(get_conn),
+    ):
+        meta = {
+            "fasta_filename": fasta.filename,
+            "vcf_filename": vcf.filename,
+            "cds_filename": cds.filename,
+            "ref_name": None,
+            "ref_length": None,
+            "ref_sha256": None,
+        }
+        try:
+            # 三个文件的全部内容只进入本次请求的局部变量
+            ref_text = _read_text(fasta, "参考序列 FASTA")
+            vcf_text = _read_text(vcf, "SNV VCF")
+            cds_text = _read_text(cds, "CDS TSV")
+            ref_name, ref_seq = parse_fasta(ref_text)
+            meta.update(
+                ref_name=ref_name,
+                ref_length=len(ref_seq),
+                ref_sha256=db.ref_digest(ref_seq),
+            )
+            transcripts = parse_cds_tsv(cds_text, ref_seq)
+            snvs = parse_snv_vcf(vcf_text, ref_seq, ref_name)
+            annotations = annotate_all(snvs, transcripts)
+        except (CompareError, AnnotateError) as exc:
+            report_id = db.insert_annotation_report(
+                conn, status="failed", error=str(exc), annotations=[], **meta
+            )
+        else:
+            report_id = db.insert_annotation_report(
+                conn, status="done", error=None, annotations=annotations, **meta
+            )
+        return RedirectResponse(url=f"/annotations/{report_id}", status_code=303)
+
+    @app.get("/annotations/{report_id}", response_class=HTMLResponse)
+    def annotation_detail(report_id: int, request: Request, conn=Depends(get_conn)):
+        report, annotations = db.get_annotation_report(conn, report_id)
+        if report is None:
+            raise HTTPException(status_code=404, detail="注释报告不存在")
+        rows = [_annotation_view(a) for a in annotations]
+        summary = {
+            label: sum(1 for r in rows if r["consequence"] == key)
+            for key, label in CONSEQUENCE_LABELS.items()
+        }
+        return templates.TemplateResponse(
+            request,
+            "annotation_report.html",
+            {"report": report, "rows": rows, "summary": summary},
+        )
+
     return app
 
 
@@ -126,6 +195,24 @@ def _kind_label(ref: str, alt: str) -> str:
     if len(ref) == 1 and len(alt) == 1:
         return "SNV"
     return "插入" if ref == "" else "缺失"
+
+
+def _annotation_view(row) -> dict:
+    return {
+        "pos": row["pos"],
+        "ref": row["ref"],
+        "alt": row["alt"],
+        "lines": ", ".join(str(n) for n in json.loads(row["vcf_lines"])) or "-",
+        "transcript": row["transcript"],
+        "cds_pos": row["cds_pos"],
+        "codon_number": row["codon_number"],
+        "ref_codon": row["ref_codon"],
+        "new_codon": row["new_codon"],
+        "aa_ref": row["aa_ref"],
+        "aa_new": row["aa_new"],
+        "consequence": row["consequence"],
+        "consequence_label": CONSEQUENCE_LABELS[row["consequence"]],
+    }
 
 
 app = create_app()

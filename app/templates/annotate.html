@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}变异注释 - 肿瘤变异位点比对{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>上传新注释</h2>
+  <form action="/annotations" method="post" enctype="multipart/form-data">
+    <p>参考序列 FASTA（单条染色体）：<br>
+      <input type="file" name="fasta" required></p>
+    <p>SNV VCF（≤200 条双等位 SNV）：<br>
+      <input type="file" name="vcf" required></p>
+    <p>CDS TSV（≤5 个转录本，每个 ≤8 段）：<br>
+      <input type="file" name="cds" required></p>
+    <button type="submit">开始注释</button>
+  </form>
+  <p class="muted">CDS TSV 每行 4 列：转录本 ID、正负链（+/-）、起始、终止（1 基闭区间，
+    可用 # 注释行与一行表头）。同一转录本须同向且区间不重叠，区间须位于参考序列内，
+    拼接后的 CDS 只含 A/C/G/T 且总长为 3 的倍数；VCF 仅接受双等位 SNV 并核对 REF。
+    按转录方向拼接 CDS 后推演原/新密码子与氨基酸，给出同义、错义、终止获得、
+    终止丢失结论，未命中任何转录本的 SNV 标为 CDS 外。任一输入非法则整次注释失败。</p>
+</div>
+
+<div class="card">
+  <h2>历史注释报告</h2>
+  {% if reports %}
+  <table>
+    <tr>
+      <th>ID</th><th>提交时间</th><th>状态</th><th>参考序列</th>
+      <th>VCF 文件</th><th>CDS 文件</th>
+      <th>SNV 数</th><th>注释行数</th><th></th>
+    </tr>
+    {% for r in reports %}
+    <tr>
+      <td>{{ r["id"] }}</td>
+      <td>{{ r["created_at"] }}</td>
+      <td>{% if r["status"] == "done" %}<span class="badge ok">完成</span>{% else %}<span class="badge fail">失败</span>{% endif %}</td>
+      <td>{% if r["ref_name"] %}{{ r["ref_name"] }} ({{ r["ref_length"] }} bp){% else %}-{% endif %}</td>
+      <td>{{ r["vcf_filename"] or "-" }}</td>
+      <td>{{ r["cds_filename"] or "-" }}</td>
+      <td>{% if r["status"] == "done" %}{{ r["n_snvs"] }}{% else %}-{% endif %}</td>
+      <td>{% if r["status"] == "done" %}{{ r["n_annotations"] }}{% else %}-{% endif %}</td>
+      <td><a href="/annotations/{{ r["id"] }}">查看</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">还没有注释报告，请先上传文件。</p>
+  {% endif %}
+</div>
+{% endblock %}

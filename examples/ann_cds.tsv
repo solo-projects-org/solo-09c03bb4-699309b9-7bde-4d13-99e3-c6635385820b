@@ -1,0 +1,5 @@
+#transcript_id	strand	start	end
+TX1	+	5	10
+TX1	+	21	26
+TX2	-	41	52
+TX3	+	5	16
